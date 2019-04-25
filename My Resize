@@ -1,0 +1,449 @@
+/* At first I wanted to create the program by simply removing every x pixel from the image and making it smaller that way. (When scaling down)
+I soon realized that this method would work although it would not be ideal. I started thinking about how I can make an algorithm
+that would minimalize data loss. I came up with a method of using averages. I started google searching and purely by chance I found
+David E. Dirkse's website, where a similar algorithm was written about. (http://www.davdata.nl/math/bmresize.html) This was very
+similar to what I had in mind. After hours spent figuring out how to create my own version, and tweaking my code I finally got it to work.
+The algorithm works by adding all the pixel colors of the several pixels that overlap onto the new pixel, and then dividing by the area to get
+the average color. This method is used for scale factors less than 1. Scale factors greater than 1 simply multiply the pixel color x amount of time
+in both horizontal and vertical directions. A scale factor of 1 simply copies the file. I also used several ideas from a program I had made previously,
+that took a sprite sheet and created a "game map."
+*/
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <math.h>
+
+#include "bmp.h"
+
+double rounded(double number, int decplaces);
+
+int main(int argc, char *argv[])
+{
+    if (argc != 4)
+    {
+        fprintf(stderr, "Usage: resize scale infile outfile\n");
+        return 1;
+    }
+
+
+    char *infile = argv[2];
+    char *outfile = argv[3];
+    double scale = rounded(atof(argv[1]), 2); //Round scale to 2 decimal places
+
+    //Checks to see if the scale is within the set limits
+    if (scale > 100 || scale <= 0)
+    {
+        fprintf(stderr, "Scale must be a number in (0.0, 100.0]\n");
+        return 2;
+    }
+
+
+    //Open input file
+    FILE *inptr = fopen(infile, "r");
+    if (inptr == NULL)
+    {
+        fprintf(stderr, "Could not open %s.\n", infile);
+        return 2;
+    }
+
+    //Open output file
+    FILE *outptr = fopen(outfile, "w");
+    if (outptr == NULL)
+    {
+        fclose(inptr);
+        fprintf(stderr, "Could not create %s.\n", outfile);
+        return 3;
+    }
+
+    //Read infile's BITMAPINFOHEADER
+    BITMAPFILEHEADER infilebf;
+    fread(&infilebf, sizeof(BITMAPFILEHEADER), 1, inptr);
+
+    //Read infile's BITMAPINFOHEADER
+    BITMAPINFOHEADER infilebi;
+    fread(&infilebi, sizeof(BITMAPINFOHEADER), 1, inptr);
+
+    // ensure infile is (likely) a 24-bit uncompressed BMP 4.0
+    if (infilebf.bfType != 0x4d42 || infilebf.bfOffBits != 54 || infilebi.biSize != 40 ||
+        infilebi.biBitCount != 24 || infilebi.biCompression != 0)
+    {
+        fclose(outptr);
+        fclose(inptr);
+        fprintf(stderr, "Unsupported file format.\n");
+        return 4;
+    }
+
+
+    BITMAPFILEHEADER outfilebf;
+    BITMAPINFOHEADER outfilebi;
+
+
+    //Determine padding for scanlines in infile
+    int infilepadding = (4 - (infilebi.biWidth * sizeof(RGBTRIPLE)) % 4) % 4;
+
+    //The following lines simply take the header files that do not change and copy them to the new file.
+    outfilebf.bfType = infilebf.bfType;
+    outfilebf.bfReserved1 = infilebf.bfReserved1;
+    outfilebf.bfReserved2 = infilebf.bfReserved2;
+    outfilebf.bfOffBits = infilebf.bfOffBits;
+    outfilebi.biSize = infilebi.biSize;
+    outfilebi.biPlanes = infilebi.biPlanes;
+    outfilebi.biBitCount = infilebi.biBitCount;
+    outfilebi.biCompression = infilebi.biCompression;
+    outfilebi.biXPelsPerMeter = infilebi.biXPelsPerMeter;
+    outfilebi.biYPelsPerMeter = infilebi.biYPelsPerMeter;
+    outfilebi.biClrUsed = infilebi.biClrUsed;
+    outfilebi.biClrImportant = infilebi.biClrImportant;
+
+
+
+    if (scale == 1)
+    {
+
+        outfilebi.biWidth = infilebi.biWidth;
+        outfilebi.biHeight = infilebi.biHeight;
+        int outfilepadding = infilepadding;
+        outfilebi.biSizeImage = infilebi.biSizeImage;
+        outfilebf.bfSize = infilebf.bfSize;
+
+        fwrite(&outfilebf, sizeof(BITMAPFILEHEADER), 1, outptr);
+        fwrite(&outfilebi, sizeof(BITMAPINFOHEADER), 1,outptr);
+
+        // iterate over infile's scanlines
+        for (int i = 0; i < abs(infilebi.biHeight); i++)
+        {
+            // iterate over pixels in scanline
+            for (int j = 0; j < infilebi.biWidth; j++)
+            {
+                // temporary storage
+                RGBTRIPLE triple;
+
+                // read RGB triple from infile
+                fread(&triple, sizeof(RGBTRIPLE), 1, inptr);
+
+                // write RGB triple to outfile
+                fwrite(&triple, sizeof(RGBTRIPLE), 1, outptr);
+            }
+
+            // skip over padding, if any
+            fseek(inptr, infilepadding, SEEK_CUR);
+
+            // then add it back (to demonstrate how)
+            for (int k = 0; k < infilepadding; k++)
+            {
+                fputc(0x00, outptr);
+            }
+        }
+    }
+
+
+    if (scale > 1)
+    {
+        //Here the width and height is extracted from the original image
+        double originalWidth = infilebi.biWidth;
+        double originalHeight = abs(infilebi.biHeight);  //absolute value is used incase the height is negative, which signifies the bitmap is top-down
+
+
+        //Here the scale is rounded of to an int basically
+        double roundedScale = rounded(scale, 0);
+
+        double newWidth = roundedScale * originalWidth;
+        double newHeight = roundedScale * originalHeight;
+
+        if (infilebi.biHeight < 0)
+            {
+                newHeight = newHeight * (-1);
+            }
+
+        outfilebi.biWidth = newWidth;
+        outfilebi.biHeight = newHeight;
+
+        //Determine padding for scanlines in infile
+        int outfilepadding = (4 - (outfilebi.biWidth * sizeof(RGBTRIPLE)) % 4) % 4;
+
+
+        //This calculates the size of the image without the header files
+        outfilebi.biSizeImage = ((outfilebi.biWidth * sizeof(RGBTRIPLE)) + outfilepadding) * abs(outfilebi.biHeight);
+
+        //This calculates the size of the file
+        outfilebf.bfSize = outfilebi.biSizeImage + sizeof(BITMAPFILEHEADER) + sizeof(BITMAPINFOHEADER);
+
+
+        fwrite(&outfilebf, sizeof(BITMAPFILEHEADER), 1, outptr);
+        fwrite(&outfilebi, sizeof(BITMAPINFOHEADER), 1,outptr);
+
+        /*Creates a file of the same size as the output file and fills it with 0x00 RGB values. This allows the program to seek() later on and change the correct pixel
+        -----------------------------------------------------------------------------------------------------*/
+        for(int i = 0; i < (outfilebi.biSizeImage / sizeof(RGBTRIPLE)); i++)
+        {
+            RGBTRIPLE temptriple;
+            temptriple.rgbtBlue = 0x00;
+            temptriple.rgbtGreen = 0x00;
+            temptriple.rgbtRed = 0x00;
+            fwrite(&temptriple, sizeof(RGBTRIPLE), 1, outptr);
+        }
+        /*-----------------------------------------------------------------------------------------------------*/
+
+
+        //Here the input and output files are set to the start of the file, not including the headers
+        fseek(outptr, sizeof(BITMAPFILEHEADER) + sizeof(BITMAPINFOHEADER), SEEK_SET);
+        fseek(inptr, sizeof(BITMAPFILEHEADER) + sizeof(BITMAPINFOHEADER), SEEK_SET);
+
+        for (int y = 0; y < originalHeight; y++)
+        {
+            for ( int x = 0; x < originalWidth; x++)
+            {
+                //Read RGB triple from infile
+                RGBTRIPLE triple;
+                fread(&triple, sizeof(RGBTRIPLE), 1, inptr);
+
+
+                for (int j = 0; j < roundedScale; j++)
+                {
+
+                    for (int i = 0; i < roundedScale; i++)
+                    {
+
+                        int currentpos = sizeof(BITMAPFILEHEADER) + sizeof(BITMAPINFOHEADER) + (((newWidth * sizeof(RGBTRIPLE)) + outfilepadding) * y * roundedScale);
+                        currentpos = currentpos + (((newWidth * sizeof(RGBTRIPLE)) + outfilepadding) * j) + (sizeof(RGBTRIPLE) * i) + (roundedScale * x * sizeof(RGBTRIPLE));
+
+
+
+                        fseek(outptr, currentpos, SEEK_SET);
+
+                        fwrite(&triple, sizeof(RGBTRIPLE), 1, outptr);
+
+
+                    }
+                    //fseek(outptr, outfilepadding, SEEK_CUR);
+                }
+            }
+            fseek(inptr, infilepadding, SEEK_CUR);
+        }
+
+
+
+    }
+
+
+
+    if (scale < 1)
+    {
+        //Here the width and height is extracted from the original image
+        double originalWidth = infilebi.biWidth;
+        double originalHeight = abs(infilebi.biHeight);  //absolute value is used incase the height is negative, which signifies the bitmap is top-down
+
+        //Here the new dimensions are calculated and rounded of to 0 places after the decimal
+        double newWidth = rounded(originalWidth * scale, 0);
+        double newHeight = rounded(originalHeight * scale, 0);
+
+        //Prevents negative height values
+        if (infilebi.biHeight < 0)
+            {
+                newHeight = newHeight * (-1);
+            }
+
+        outfilebi.biWidth = newWidth;
+        outfilebi.biHeight = newHeight;
+
+        //Determine padding for scanlines in infile
+        int outfilepadding = (4 - (outfilebi.biWidth * sizeof(RGBTRIPLE)) % 4) % 4;
+
+        //This calculates the size of the image without the header files
+        outfilebi.biSizeImage = ((outfilebi.biWidth * sizeof(RGBTRIPLE)) + outfilepadding) * abs(outfilebi.biHeight);
+
+        //This calculates the file size
+        outfilebf.bfSize = outfilebi.biSizeImage + sizeof(BITMAPFILEHEADER) + sizeof(BITMAPINFOHEADER);
+
+
+        fwrite(&outfilebf, sizeof(BITMAPFILEHEADER), 1, outptr);
+        fwrite(&outfilebi, sizeof(BITMAPINFOHEADER), 1,outptr);
+
+        /*Creates a file of the same size as the output file and fills it with 0x00 RGB values. This allows the program to seek() later on and change the correct pixel
+        -----------------------------------------------------------------------------------------------------*/
+        for(int i = 0; i < (outfilebi.biWidth + outfilepadding) * abs(outfilebi.biHeight); i++)
+        {
+            RGBTRIPLE temptriple;
+            temptriple.rgbtBlue = 0x00;
+            temptriple.rgbtGreen = 0x00;
+            temptriple.rgbtRed = 0x00;
+            fwrite(&temptriple, sizeof(RGBTRIPLE), 1, outptr);
+        }
+        /*-----------------------------------------------------------------------------------------------------*/
+
+        //Here the input and output files are set to the start of the file, not including the headers
+        fseek(outptr, sizeof(BITMAPFILEHEADER) + sizeof(BITMAPINFOHEADER), SEEK_SET);
+        fseek(inptr, sizeof(BITMAPFILEHEADER) + sizeof(BITMAPINFOHEADER), SEEK_SET);
+
+
+
+        //Calculates the size of the theoretical pixel, which will be used to take average colors of overlapping pixels.
+        double horizontalPix = originalWidth / newWidth;
+        //double horizontalPix = (originalWidth - infilepadding) / (newWidth - outfilepadding);
+        double verticalPix = originalHeight / newHeight;
+
+
+        /* I multiplied the value by 0.99999999 because ocasionally it would lead to errors caused by values being outside the range. I found this tip on
+        http://www.davdata.nl/math/bmresize.html..... and I found it to be true.
+        */
+        double horizontalStep = 0.9999999 * horizontalPix;
+        double verticalStep = 0.99999999 * verticalPix;
+
+
+        //This was used to check the final outcome in pixels
+        int finalpixelcount = 0;
+
+        //First loop transitions through the pixels in the resized image.
+        for (int y = 0; y < newHeight; y++)
+        {
+            for (int x = 0; x < newWidth; x++)
+            {
+                double lefttopX = horizontalStep * x;
+                double lefttopY = verticalStep * y;
+                double bottomrightX = lefttopX + horizontalStep;
+                double bottomrightY = lefttopY + verticalStep;
+
+                //Here (int) is used to truncate the values that will later be used
+                int istart = (int) lefttopX;
+                int jstart = (int) lefttopY;
+                int jend = (int) bottomrightY;
+                int iend = (int) bottomrightX;
+
+
+                int sizeArrayi = (iend - istart) + 1;
+                int sizeArrayj = (jend - jstart) + 1;
+
+
+                double dx[sizeArrayi][sizeArrayj];
+                double dy[sizeArrayi][sizeArrayj];
+                double redAve[sizeArrayi][sizeArrayj];
+                double blueAve[sizeArrayi][sizeArrayj];
+                double greenAve[sizeArrayi][sizeArrayj];
+
+                double totalRed;
+                double totalGreen;
+                double totalBlue;
+
+                //Second loop is used to calculate the average color of the neighboring pixels and input it into one pixel.
+                for (int j = jstart, jth = 0; j <= jend; j++, jth++)
+                {
+                    for (int i = istart, ith = 0; i <= iend; i++, ith++)
+                        {
+                            if (i == istart)
+                            {
+                                dx[ith][jth] = (i + 1) - lefttopX;
+                            }
+                            else if (i == iend)
+                            {
+                                dx[ith][jth] = bottomrightX - i;
+                            }
+                            else
+                            {
+                                dx[ith][jth] = 1.0;
+                            }
+
+                            //-----------
+                            if (j == jstart)
+                            {
+                                dy[ith][jth] = (j + 1) - lefttopY;
+                            }
+                            else if (j == jend)
+                            {
+                                dy[ith][jth] = bottomrightY - j;
+                            }
+                            else
+                            {
+                                dy[ith][jth] = 1.0;
+                            }
+
+
+                            // temporary storage
+                            RGBTRIPLE triple;
+
+                            // read RGB triple from infile
+
+                            int currentpos = sizeof(BITMAPFILEHEADER) + sizeof(BITMAPINFOHEADER) + (((j * originalWidth) + i) * sizeof(RGBTRIPLE)) + (infilepadding * j);
+                            fseek(inptr, currentpos, SEEK_SET);
+                            fread(&triple, sizeof(RGBTRIPLE), 1, inptr);
+                            redAve[ith][jth] = rounded(triple.rgbtRed * (dx[ith][jth] * dy[ith][jth]), 0);
+                            greenAve[ith][jth] = rounded(triple.rgbtGreen * (dx[ith][jth] * dy[ith][jth]), 0);
+                            blueAve[ith][jth] =rounded(triple.rgbtBlue * (dx[ith][jth] * dy[ith][jth]), 0);
+
+                            if (ith == 0 && jth == 0)
+                            {
+                                totalRed = redAve[ith][jth];
+                                totalBlue = blueAve[ith][jth];
+                                totalGreen = greenAve[ith][jth];
+                            }
+                            else
+                            {
+                                totalRed = totalRed + redAve[ith][jth];
+                                totalBlue = totalBlue + blueAve[ith][jth];
+                                totalGreen = totalGreen + greenAve[ith][jth];
+                            }
+
+
+                        }
+
+
+                }
+
+
+
+                double finalRed = rounded(totalRed / (horizontalPix * verticalPix), 0);
+                double finalGreen = rounded(totalGreen / (horizontalPix * verticalPix), 0);
+                double finalBlue = rounded(totalBlue / (horizontalPix * verticalPix), 0);
+
+                if (finalRed > 255)
+                {
+                    finalRed -= 1;
+                }
+
+                if (finalGreen > 255)
+                {
+                    finalGreen -= 1;
+                }
+
+                if (finalBlue > 255)
+                {
+                    finalBlue -= 1;
+                }
+
+                RGBTRIPLE outtriple;
+
+                outtriple.rgbtBlue = finalBlue;
+                outtriple.rgbtGreen = finalGreen;
+                outtriple.rgbtRed = finalRed;
+
+
+                fwrite(&outtriple, sizeof(RGBTRIPLE), 1, outptr);
+
+                finalpixelcount++;
+
+            }
+            //Skip over padding in each scan line in the outfile
+            fseek(outptr, outfilepadding, SEEK_CUR);
+        }
+
+}
+
+
+
+
+fclose(outptr);
+fclose(inptr);
+return 0;
+
+}
+
+
+//This function rounds off a number to a certain number of decimal places
+double rounded(double number, int decplaces)
+{
+
+    double multiplier = pow(10, decplaces);
+    double tempnum = number * multiplier;
+    int truncated = tempnum + 0.5;
+    return truncated / multiplier;
+
+}
